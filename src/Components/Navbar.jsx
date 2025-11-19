@@ -32,9 +32,9 @@ const styles = {
     alignItems: "center",
     backgroundColor: "transparent", // ✅ transparent navbar
     color: "#eceff3ff",               // elegant dark blue text
-    padding: "15px 30px",
+    padding: "15px 40px",
     position: "fixed",             // stays under topbar when scrolling
-    top: "30px",                    // adjust to height of TopBar
+    top: "40px",                    // adjust to height of TopBar
     zIndex: 999,
     boxSizing: "border-box",
     flexWrap: "wrap",
