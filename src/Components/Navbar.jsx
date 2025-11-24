@@ -1,6 +1,6 @@
 import React from "react";
-import { BiFontColor } from "react-icons/bi";
-import { FaShoppingCart } from "react-icons/fa"; // for cart icon
+import { FaShoppingCart } from "react-icons/fa";
+import { Link } from "react-router-dom"; // ✅ import Link
 
 const Navbar = () => {
   return (
@@ -10,10 +10,18 @@ const Navbar = () => {
 
       {/* Menu Items */}
       <ul style={styles.menu}>
-        <li style={styles.menuItem}>Home</li>
-        <li style={styles.menuItem}>Categories</li>
-        <li style={styles.menuItem}>Promotions</li>
-        <li style={styles.menuItem}>Account</li>
+        <li style={styles.menuItem}>
+          <Link to="/" style={styles.link}>Home</Link>
+        </li>
+        <li style={styles.menuItem}>
+          <Link to="/categories" style={styles.link}>Categories</Link>
+        </li>
+        <li style={styles.menuItem}>
+          <Link to="/promotions" style={styles.link}>Promotions</Link>
+        </li>
+        <li style={styles.menuItem}>
+          <Link to="/account" style={styles.link}>Account</Link>
+        </li>
       </ul>
 
       {/* Cart Icon */}
@@ -30,14 +38,16 @@ const styles = {
     display: "flex",
     justifyContent: "space-between",
     alignItems: "center",
-    backgroundColor: "transparent", // ✅ transparent navbar
-    color: "#eceff3ff",               // elegant dark blue text
+    backgroundColor: "rgba(0,0,0,0.6)", // ✅ dark overlay effect
+    backdropFilter: "blur(4px)",        // ✅ adds a frosted glass feel
+    color: "#eceff3ff",
     padding: "15px 40px",
-    position: "fixed",             // stays under topbar when scrolling
-    top: "40px",                    // adjust to height of TopBar
+    position: "fixed",
+    top: "40px",
     zIndex: 999,
     boxSizing: "border-box",
     flexWrap: "wrap",
+    borderRadius: "8px",                // optional rounded edges
   },
   brand: {
     fontSize: "20px",
@@ -56,10 +66,12 @@ const styles = {
   },
   menuItem: {
     margin: "0 15px",
-    cursor: "pointer",
     fontSize: "16px",
     transition: "color 0.3s ease",
-    Color: "#ecececff",
+  },
+  link: {
+    textDecoration: "none",
+    color: "#ecececff", // ✅ ensure link inherits your color
   },
   cart: {
     flex: 1,

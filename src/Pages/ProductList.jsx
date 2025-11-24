@@ -1,15 +1,17 @@
 import React from "react";
 import TopBar from "../Components/TopBar";
 import Navbar from "../Components/Navbar";
-import Slides from "../Components/Slides";
+import Banner from "../Components/Banner";
+import ProductList from "../Components/ProductList";
 
-function ProductList() {
+function Products() {
   return (
 <div>
       <TopBar />
       <Navbar />
       <div style={{ marginTop: "120px" }}>
-      <Slides />
+      <Banner />
+      <ProductList />
   
       </div>
     </div>
@@ -18,4 +20,4 @@ function ProductList() {
   );
 }
 
-export default ProductList;
+export default Products;
