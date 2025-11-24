@@ -54,7 +54,6 @@ const ProductView = () => {
           <p style={styles.price}>Price: ${product.price}</p>
           <p style={styles.stock}>In stock: {product.stock}</p>
 
-          {/* ✅ Add to Cart Button */}
           <button style={styles.button}>Add to Cart</button>
         </div>
       </div>
@@ -64,21 +63,24 @@ const ProductView = () => {
 
 const styles = {
   wrapper: {
-    padding: "60px",
+    minHeight: "100vh",          
     display: "flex",
-    justifyContent: "center",
+    justifyContent: "center",   
+    alignItems: "center",     
+    // padding: "10px",
     boxSizing: "border-box",
+    backgroundColor: "#e2dcdcff", 
   },
   card: {
     display: "flex",
     flexDirection: "row",
     gap: "30px",
-    maxWidth: "1000px",
-    width: "100%",
+    maxWidth: "60%",        
+    width: "100vw",           
     backgroundColor: "#fff",
     borderRadius: "12px",
     boxShadow: "0 6px 16px rgba(0,0,0,0.1)",
-    padding: "30px",
+    padding: "50px",
     alignItems: "flex-start",
   },
   image: {
@@ -135,14 +137,14 @@ const styles = {
   skeletonImage: {
     width: "50%",
     height: "300px",
-    backgroundColor: "#e0e0e0",
+    backgroundColor: "#adaaaaff",
     animation: "pulse 1.5s infinite",
     borderRadius: "10px",
   },
   skeletonText: {
     width: "70%",
     height: "20px",
-    backgroundColor: "#e0e0e0",
+    backgroundColor: "#979393ff",
     margin: "12px 0",
     borderRadius: "4px",
     animation: "pulse 1.5s infinite",
@@ -150,7 +152,7 @@ const styles = {
   skeletonTextSmall: {
     width: "40%",
     height: "16px",
-    backgroundColor: "#e0e0e0",
+    backgroundColor: "#817e7eff",
     margin: "8px 0",
     borderRadius: "4px",
     animation: "pulse 1.5s infinite",
@@ -158,7 +160,7 @@ const styles = {
   skeletonButton: {
     width: "120px",
     height: "40px",
-    backgroundColor: "#e0e0e0",
+    backgroundColor: "#858383ff",
     marginTop: "20px",
     borderRadius: "8px",
     animation: "pulse 1.5s infinite",
@@ -173,14 +175,5 @@ styleSheet.insertRule(`
   50% { opacity: 0.4; }
   100% { opacity: 1; }
 }`, styleSheet.cssRules.length);
-
-// ✅ Responsive layout
-styleSheet.insertRule(`
-@media (max-width: 768px) {
-  .product-card {
-    flex-direction: column;
-  }
-}
-`, styleSheet.cssRules.length);
 
 export default ProductView;
