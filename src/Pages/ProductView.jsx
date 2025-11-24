@@ -2,7 +2,7 @@ import React from "react";
 import TopBar from "../Components/TopBar";
 import Navbar from "../Components/Navbar";
 import Banner from "../Components/Banner";
-import ProductList from "../Components/ProductList";
+import Footer from "../Components/Footer";
 import ProductView from "../Components/ProdectView";
 
 function ProductDetail() {
@@ -12,7 +12,7 @@ function ProductDetail() {
       <Navbar />
       <div style={{ marginTop: "120px" }}>
       <ProductView />
-      {/* <ProductList /> */}
+      <Footer />
   
       </div>
     </div>
