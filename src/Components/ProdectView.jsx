@@ -7,7 +7,7 @@ const ProductView = () => {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetch(`http://127.0.0.1:8000/api/product/products/${id}/`)
+    fetch(`https://storeapis-8bua.onrender.com/api/product/products/${id}/`)
       .then((res) => res.json())
       .then((data) => {
         setProduct(data);
