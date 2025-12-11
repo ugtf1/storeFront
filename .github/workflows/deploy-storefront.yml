@@ -1,5 +1,5 @@
-# UGTF CI/CD Pipeline for storeFront
-# Features: Buildpacks (No Dockerfile) + Lighthouse + SEO + Notifications
+# UGTF CI/CD Pipeline for StoreFront (React/Vite)
+# Features: Docker Build + Nginx + Lighthouse + SEO + Email Notifications
 name: StoreFront CI/CD to Cloud Run
 
 on:
@@ -19,7 +19,7 @@ env:
   SERVICE_URL: https://storefront-30228073381.us-east1.run.app
 
 jobs:
-  # 1️⃣ Build and Deploy
+  # 1️⃣ Build and Deploy (Frontend Docker)
   build-and-deploy:
     runs-on: ubuntu-latest
     permissions:
@@ -43,15 +43,16 @@ jobs:
         with:
           project_id: ${{ env.PROJECT_ID }}
 
-      # FIX: Buildpacks (replaces docker build)
-      - name: Build with Cloud Buildpacks
+      - name: Build and Push Docker Image
         id: build
         run: |
           IMAGE_TAG="${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.ARTIFACT_REPO }}/${{ env.IMAGE_NAME }}:${{ github.sha }}"
-          echo "Building with Buildpacks: $IMAGE_TAG"
+          echo "Building Frontend Container: $IMAGE_TAG"
           
-          # Submits source to Cloud Build (Requires Storage Admin permission)
-          gcloud builds submit --pack image="$IMAGE_TAG" .
+          # Standard Docker Build (Uses the Frontend Dockerfile we created)
+          docker build -t "$IMAGE_TAG" .
+          gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
+          docker push "$IMAGE_TAG"
           
           echo "image=$IMAGE_TAG" >> $GITHUB_OUTPUT
 
@@ -64,9 +65,6 @@ jobs:
           image: ${{ steps.build.outputs.image }}
           wait: true
           flags: '--allow-unauthenticated'
-          env_vars: |
-            ALLOWED_HOSTS=${{ env.SERVICE_URL }}
-            SECRET_KEY=${{ secrets.DJANGO_SECRET_KEY }}
 
   # 2️⃣ Health Check
   health-check:
@@ -88,7 +86,7 @@ jobs:
           echo "❌ Service did not become healthy in time."
           exit 1
 
-  # 3️⃣ Lighthouse Audit
+  # 3️⃣ Lighthouse Audit (Desktop + Mobile)
   lighthouse-audit:
     needs: health-check
     runs-on: ubuntu-latest
@@ -102,13 +100,18 @@ jobs:
       - name: Run Lighthouse Audit
         run: |
           mkdir -p .lighthouseci
-          # Desktop
+          
+          echo "🖥️ Running Desktop Audit..."
           lhci collect --url=${{ env.SERVICE_URL }} --numberOfRuns=1 --settings.formFactor=desktop --settings.screenEmulation.mobile=false --settings.throttlingMethod=provided
           mv .lighthouseci/lhr-*.json ./lighthouse-desktop.json
-          # Mobile
+          
+          # Clear for next run
           rm -rf .lighthouseci/lhr-*.json
+          
+          echo "📱 Running Mobile Audit..."
           lhci collect --url=${{ env.SERVICE_URL }} --numberOfRuns=1 --settings.formFactor=mobile --settings.throttlingMethod=simulate
           mv .lighthouseci/lhr-*.json ./lighthouse-mobile.json
+
       - name: Extract Scores
         id: summary
         run: |
@@ -117,14 +120,17 @@ jobs:
             REPORT="$1"; DEVICE="$2"
             PERF=$(get_score performance $REPORT)
             SEO=$(get_score seo $REPORT)
-            echo "${DEVICE}: Performance=${PERF}, SEO=${SEO}"
+            ACCESS=$(get_score accessibility $REPORT)
+            echo "${DEVICE}: Performance=${PERF}, SEO=${SEO}, Accessibility=${ACCESS}"
           }
           DESKTOP=$(extract_summary lighthouse-desktop.json "🖥️ Desktop")
           MOBILE=$(extract_summary lighthouse-mobile.json "📱 Mobile")
+          
           SUMMARY="Lighthouse Results:\n$DESKTOP\n$MOBILE"
+          # Safe export to GITHUB_OUTPUT
           echo "lighthouse_summary=$(echo "$SUMMARY" | tr '\n' ' ')" >> $GITHUB_OUTPUT
 
-  # 4️⃣ SEO Audit
+  # 4️⃣ Basic SEO Audit (Static HTML Check)
   seo-audit:
     needs: lighthouse-audit
     runs-on: ubuntu-latest
@@ -143,12 +149,19 @@ jobs:
           import requests, json
           from bs4 import BeautifulSoup
           url = "${{ env.SERVICE_URL }}"
+          print(f"🔍 Auditing {url}...")
           try:
               resp = requests.get(url, timeout=10)
               soup = BeautifulSoup(resp.text, "lxml")
               issues = []
+              
+              # Basic Tag Checks
               if not soup.title: issues.append("Missing <title>")
-              if not soup.find("h1"): issues.append("Missing <h1>")
+              if not soup.find("meta", attrs={"name": "description"}): issues.append("Missing meta description")
+              
+              # Note: React apps often lack H1s in the initial HTML, so we check strictly if the body is empty
+              if not soup.body or not soup.body.text.strip(): issues.append("Page body appears empty (Client-side rendering issue?)")
+              
               with open("seo-results.json", "w") as f: json.dump(issues, f)
           except Exception as e:
               with open("seo-results.json", "w") as f: json.dump([str(e)], f)
@@ -157,7 +170,7 @@ jobs:
         id: summary
         run: echo "issues_summary=$(jq -r 'join(", ")' seo-results.json)" >> $GITHUB_OUTPUT
 
-  # 5️⃣ Notify
+  # 5️⃣ Notify via Email
   notify:
     needs: [lighthouse-audit, seo-audit]
     runs-on: ubuntu-latest
@@ -170,12 +183,18 @@ jobs:
           server_port: 465
           username: ${{ secrets.EMAIL_USER }}
           password: ${{ secrets.EMAIL_PASS }}
-          subject: "🚀 StoreFront Deployment: ${{ job.status }}"
+          subject: "🚀 StoreFront Deployment Result: ${{ job.status }}"
           to: ono@ugtf.org
           from: UGTF CI Bot
           body: |
-             Deployment of StoreFront (storefront2) to Cloud Run is complete.
-             URL: ${{ env.SERVICE_URL }}
+             ✅ Deployment of StoreFront (Frontend/React) to Cloud Run is complete.
              
-             Lighthouse: ${{ needs.lighthouse-audit.outputs.lighthouse_summary }}
-             SEO Issues: ${{ needs.seo-audit.outputs.issues_summary }}
+             🌍 URL: ${{ env.SERVICE_URL }}
+             
+             **📊 Lighthouse Summary:**
+             ${{ needs.lighthouse-audit.outputs.lighthouse_summary }}
+             
+             **🧩 SEO Audit (Static):**
+             ${{ needs.seo-audit.outputs.issues_summary }}
+             
+             Use the URL above to verify the live site.
