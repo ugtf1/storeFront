@@ -1,0 +1,186 @@
+# UGTF CI/CD Pipeline for storeFront
+# Updated based on active Cloud Run Service config
+name: StoreFront CI/CD to Cloud Run
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+env:
+  PROJECT_ID: top-cedar-471512-k3
+  PROJECT_NUMBER: 30228073381
+  REGION: us-east1
+  SERVICE_NAME: storefront
+  # Updated based on your provided config:
+  ARTIFACT_REPO: storeapi
+  IMAGE_NAME: storefront2
+  # Using the primary URL from your config
+  SERVICE_URL: https://storefront-30228073381.us-east1.run.app
+
+jobs:
+  # 1️⃣ Build and Deploy
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: 'read'
+      id-token: 'write'
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+          # Using UGTF standard pool
+          workload_identity_provider: projects/${{ env.PROJECT_NUMBER }}/locations/global/workloadIdentityPools/ugtf-github-pool/providers/github-actions
+          service_account: github-runner-ugtf@${{ env.PROJECT_ID }}.iam.gserviceaccount.com
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      - name: Build and Push Docker Image
+        id: build
+        run: |
+          # Path updated to match your 'storeapi/storefront2' structure
+          IMAGE_TAG="${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.ARTIFACT_REPO }}/${{ env.IMAGE_NAME }}:${{ github.sha }}"
+          
+          echo "Building image: $IMAGE_TAG"
+          docker build -t "$IMAGE_TAG" .
+          gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
+          docker push "$IMAGE_TAG"
+          echo "image=$IMAGE_TAG" >> $GITHUB_OUTPUT
+
+      - name: Deploy to Cloud Run
+        id: deploy
+        uses: google-github-actions/deploy-cloudrun@v2
+        with:
+          service: ${{ env.SERVICE_NAME }}
+          region: ${{ env.REGION }}
+          image: ${{ steps.build.outputs.image }}
+          wait: true
+          # Preserving 'run.googleapis.com/invoker-iam-disabled' setting
+          flags: '--allow-unauthenticated' 
+          # Injecting Env Vars (Create DJANGO_SECRET_KEY in GitHub Secrets!)
+          env_vars: |
+            ALLOWED_HOSTS=${{ env.SERVICE_URL }}
+            SECRET_KEY=${{ secrets.DJANGO_SECRET_KEY }}
+
+  # 2️⃣ Health Check
+  health-check:
+    needs: build-and-deploy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify Cloud Run deployment health
+        run: |
+          echo "Checking service health at ${{ env.SERVICE_URL }}..."
+          for i in {1..10}; do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" ${{ env.SERVICE_URL }})
+            if [ "$STATUS" = "200" ]; then
+              echo "✅ Health check passed (HTTP 200)"
+              exit 0
+            fi
+            echo "Waiting for service... (status $STATUS)"
+            sleep 5
+          done
+          echo "❌ Service did not become healthy in time."
+          exit 1
+
+  # 3️⃣ Lighthouse Audit
+  lighthouse-audit:
+    needs: health-check
+    runs-on: ubuntu-latest
+    outputs:
+      lighthouse_summary: ${{ steps.summary.outputs.lighthouse_summary }}
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+      - name: Install Lighthouse CI
+        run: npm install -g @lhci/cli@0.13.x jq
+      - name: Run Lighthouse Audit
+        run: |
+          mkdir -p .lighthouseci
+          # Desktop
+          lhci collect --url=${{ env.SERVICE_URL }} --numberOfRuns=1 --settings.formFactor=desktop --settings.screenEmulation.mobile=false --settings.throttlingMethod=provided
+          mv .lighthouseci/lhr-*.json ./lighthouse-desktop.json
+          # Mobile
+          rm -rf .lighthouseci/lhr-*.json
+          lhci collect --url=${{ env.SERVICE_URL }} --numberOfRuns=1 --settings.formFactor=mobile --settings.throttlingMethod=simulate
+          mv .lighthouseci/lhr-*.json ./lighthouse-mobile.json
+      - name: Extract Scores
+        id: summary
+        run: |
+          get_score() { jq -r ".categories.$1.score" "$2"; }
+          extract_summary() {
+            REPORT="$1"; DEVICE="$2"
+            PERF=$(get_score performance $REPORT)
+            SEO=$(get_score seo $REPORT)
+            echo "${DEVICE}: Performance=${PERF}, SEO=${SEO}"
+          }
+          DESKTOP=$(extract_summary lighthouse-desktop.json "🖥️ Desktop")
+          MOBILE=$(extract_summary lighthouse-mobile.json "📱 Mobile")
+          SUMMARY="Lighthouse Results:\n$DESKTOP\n$MOBILE"
+          echo "lighthouse_summary=$(echo "$SUMMARY" | tr '\n' ' ')" >> $GITHUB_OUTPUT
+
+  # 4️⃣ SEO Audit
+  seo-audit:
+    needs: lighthouse-audit
+    runs-on: ubuntu-latest
+    outputs:
+      issues_summary: ${{ steps.summary.outputs.issues_summary }}
+    steps:
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install Dependencies
+        run: pip install requests beautifulsoup4 lxml jq
+      - name: Run SEO Script
+        run: |
+          python - <<'END_SCRIPT'
+          import requests, json
+          from bs4 import BeautifulSoup
+          url = "${{ env.SERVICE_URL }}"
+          try:
+              resp = requests.get(url, timeout=10)
+              soup = BeautifulSoup(resp.text, "lxml")
+              issues = []
+              if not soup.title: issues.append("Missing <title>")
+              if not soup.find("h1"): issues.append("Missing <h1>")
+              with open("seo-results.json", "w") as f: json.dump(issues, f)
+          except Exception as e:
+              with open("seo-results.json", "w") as f: json.dump([str(e)], f)
+          END_SCRIPT
+      - name: Generate Summary
+        id: summary
+        run: echo "issues_summary=$(jq -r 'join(", ")' seo-results.json)" >> $GITHUB_OUTPUT
+
+  # 5️⃣ Notify
+  notify:
+    needs: [lighthouse-audit, seo-audit]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Send Email Summary
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          username: ${{ secrets.EMAIL_USER }}
+          password: ${{ secrets.EMAIL_PASS }}
+          subject: "🚀 StoreFront Deployment: ${{ job.status }}"
+          to: ono@ugtf.org
+          from: UGTF CI Bot
+          body: |
+             Deployment of StoreFront (storefront2) to Cloud Run is complete.
+             URL: ${{ env.SERVICE_URL }}
+             
+             Lighthouse: ${{ needs.lighthouse-audit.outputs.lighthouse_summary }}
+             SEO Issues: ${{ needs.seo-audit.outputs.issues_summary }}
