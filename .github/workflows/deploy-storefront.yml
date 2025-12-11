@@ -1,5 +1,5 @@
 # UGTF CI/CD Pipeline for storeFront
-# FIX: Uses Buildpacks (No Dockerfile)
+# Features: Buildpacks (No Dockerfile) + Lighthouse + SEO + Notifications
 name: StoreFront CI/CD to Cloud Run
 
 on:
@@ -19,6 +19,7 @@ env:
   SERVICE_URL: https://storefront-30228073381.us-east1.run.app
 
 jobs:
+  # 1️⃣ Build and Deploy
   build-and-deploy:
     runs-on: ubuntu-latest
     permissions:
@@ -42,17 +43,14 @@ jobs:
         with:
           project_id: ${{ env.PROJECT_ID }}
 
-      # 🔴 OLD STEP REMOVED: docker build ...
-      # 🟢 NEW STEP ADDED: Build with Buildpacks
+      # FIX: Buildpacks (replaces docker build)
       - name: Build with Cloud Buildpacks
         id: build
         run: |
           IMAGE_TAG="${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.ARTIFACT_REPO }}/${{ env.IMAGE_NAME }}:${{ github.sha }}"
-          
           echo "Building with Buildpacks: $IMAGE_TAG"
           
-          # This command builds the image securely on Google Cloud (not the runner)
-          # It mimics exactly what happens when you deploy from the console
+          # Submits source to Cloud Build (Requires Storage Admin permission)
           gcloud builds submit --pack image="$IMAGE_TAG" .
           
           echo "image=$IMAGE_TAG" >> $GITHUB_OUTPUT
@@ -70,7 +68,7 @@ jobs:
             ALLOWED_HOSTS=${{ env.SERVICE_URL }}
             SECRET_KEY=${{ secrets.DJANGO_SECRET_KEY }}
 
-  # 2️⃣ Health Check (Standard)
+  # 2️⃣ Health Check
   health-check:
     needs: build-and-deploy
     runs-on: ubuntu-latest
@@ -89,3 +87,95 @@ jobs:
           done
           echo "❌ Service did not become healthy in time."
           exit 1
+
+  # 3️⃣ Lighthouse Audit
+  lighthouse-audit:
+    needs: health-check
+    runs-on: ubuntu-latest
+    outputs:
+      lighthouse_summary: ${{ steps.summary.outputs.lighthouse_summary }}
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+      - name: Install Lighthouse CI
+        run: npm install -g @lhci/cli@0.13.x jq
+      - name: Run Lighthouse Audit
+        run: |
+          mkdir -p .lighthouseci
+          # Desktop
+          lhci collect --url=${{ env.SERVICE_URL }} --numberOfRuns=1 --settings.formFactor=desktop --settings.screenEmulation.mobile=false --settings.throttlingMethod=provided
+          mv .lighthouseci/lhr-*.json ./lighthouse-desktop.json
+          # Mobile
+          rm -rf .lighthouseci/lhr-*.json
+          lhci collect --url=${{ env.SERVICE_URL }} --numberOfRuns=1 --settings.formFactor=mobile --settings.throttlingMethod=simulate
+          mv .lighthouseci/lhr-*.json ./lighthouse-mobile.json
+      - name: Extract Scores
+        id: summary
+        run: |
+          get_score() { jq -r ".categories.$1.score" "$2"; }
+          extract_summary() {
+            REPORT="$1"; DEVICE="$2"
+            PERF=$(get_score performance $REPORT)
+            SEO=$(get_score seo $REPORT)
+            echo "${DEVICE}: Performance=${PERF}, SEO=${SEO}"
+          }
+          DESKTOP=$(extract_summary lighthouse-desktop.json "🖥️ Desktop")
+          MOBILE=$(extract_summary lighthouse-mobile.json "📱 Mobile")
+          SUMMARY="Lighthouse Results:\n$DESKTOP\n$MOBILE"
+          echo "lighthouse_summary=$(echo "$SUMMARY" | tr '\n' ' ')" >> $GITHUB_OUTPUT
+
+  # 4️⃣ SEO Audit
+  seo-audit:
+    needs: lighthouse-audit
+    runs-on: ubuntu-latest
+    outputs:
+      issues_summary: ${{ steps.summary.outputs.issues_summary }}
+    steps:
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install Dependencies
+        run: pip install requests beautifulsoup4 lxml jq
+      - name: Run SEO Script
+        run: |
+          python - <<'EOF'
+          import requests, json
+          from bs4 import BeautifulSoup
+          url = "${{ env.SERVICE_URL }}"
+          try:
+              resp = requests.get(url, timeout=10)
+              soup = BeautifulSoup(resp.text, "lxml")
+              issues = []
+              if not soup.title: issues.append("Missing <title>")
+              if not soup.find("h1"): issues.append("Missing <h1>")
+              with open("seo-results.json", "w") as f: json.dump(issues, f)
+          except Exception as e:
+              with open("seo-results.json", "w") as f: json.dump([str(e)], f)
+          EOF
+      - name: Generate Summary
+        id: summary
+        run: echo "issues_summary=$(jq -r 'join(", ")' seo-results.json)" >> $GITHUB_OUTPUT
+
+  # 5️⃣ Notify
+  notify:
+    needs: [lighthouse-audit, seo-audit]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Send Email Summary
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          username: ${{ secrets.EMAIL_USER }}
+          password: ${{ secrets.EMAIL_PASS }}
+          subject: "🚀 StoreFront Deployment: ${{ job.status }}"
+          to: ono@ugtf.org
+          from: UGTF CI Bot
+          body: |
+             Deployment of StoreFront (storefront2) to Cloud Run is complete.
+             URL: ${{ env.SERVICE_URL }}
+             
+             Lighthouse: ${{ needs.lighthouse-audit.outputs.lighthouse_summary }}
+             SEO Issues: ${{ needs.seo-audit.outputs.issues_summary }}
